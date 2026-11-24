@@ -237,6 +237,37 @@ pub(crate) fn pc_format(format: u32) -> u32 {
     }
 }
 
+/// Console formats some hosts can neither render into nor write as
+/// unordered access (NVIDIA: RGB9E5, BGRA4), with a substitute of the same
+/// size, so copies to and from title memory keep their layout.
+/// shortcut: the substitute encodes texels differently; title memory
+/// copied into (or back from) such a texture reads wrong colors. Render
+/// targets the GPU both writes and reads are unaffected.
+pub(crate) const RENDER_SUBSTITUTES: [(u32, u32); 2] = [(67, 26), (115, 86)];
+
+/// `format`, or its substitute where the host cannot use `format` as a
+/// render target (`render_target`) or for unordered writes (`unordered`)
+/// and the substitute can.
+#[cfg(windows)]
+pub(crate) fn host_target_format(format: u32, render_target: bool, unordered: bool) -> u32 {
+    let Some(host) = crate::host::host() else {
+        return format;
+    };
+    if host.format_supports(format, render_target, unordered) {
+        return format;
+    }
+    match RENDER_SUBSTITUTES.iter().find(|&&(f, _)| f == format) {
+        Some(&(_, s)) if host.format_supports(s, render_target, unordered) => s,
+        _ => format,
+    }
+}
+
+/// Whether a view in `view`'s format of a texture in `texture`'s format
+/// views a substituted host copy (see [`RENDER_SUBSTITUTES`]).
+pub(crate) fn substituted_view(view: u32, texture: u32) -> bool {
+    RENDER_SUBSTITUTES.iter().any(|&(f, s)| f == view && s == texture)
+}
+
 /// The typeless format of a format's family (itself if it has none).
 pub(crate) fn family(format: u32) -> u32 {
     const FAMILIES: [(u32, u32); 22] = [
@@ -1023,6 +1054,25 @@ fn host_desc(desc: &ResourceDesc) -> Option<ResourceDesc> {
     if d.flags & UNORDERED != 0 && SRGB.iter().any(|&(srgb, _)| srgb == d.format) {
         d.format = family(d.format);
     }
+    // Hosts that cannot render into or write a console format get a
+    // same-size substitute (RENDER_SUBSTITUTES), or else the texture
+    // without unordered access (its UAVs then read zeros).
+    const RENDER_TARGET: u32 = 1;
+    let (target, unordered) = (d.flags & RENDER_TARGET != 0, d.flags & UNORDERED != 0);
+    if target || unordered {
+        let substitute = host_target_format(d.format, target, unordered);
+        if substitute != d.format {
+            tracing::debug!(format = d.format, substitute, "host texture format substituted");
+            d.format = substitute;
+        } else if unordered
+            && let Some(host) = crate::host::host()
+            && !host.format_supports(d.format, target, true)
+            && host.format_supports(d.format, target, false)
+        {
+            tracing::debug!(format = d.format, "host texture made without unordered access");
+            d.flags &= !UNORDERED;
+        }
+    }
     Some(d)
 }
 
@@ -1180,6 +1230,9 @@ fn make_texture(d: &ResourceDesc, state: u32, clear: *const c_void) -> Option<Ho
         // SAFETY: the title passes a whole clear value.
         let mut value = unsafe { clear.cast::<[u32; 5]>().read_unaligned() };
         value[0] = pc_format(value[0]);
+        if substituted_view(value[0], d.format) {
+            value[0] = d.format;
+        }
         value
     });
     let clear_value = clear_value.as_ref().map(|v| std::ptr::from_ref(v).cast::<D3D12_CLEAR_VALUE>());

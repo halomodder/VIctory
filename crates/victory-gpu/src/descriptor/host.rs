@@ -1041,6 +1041,15 @@ fn fits(texture: &ID3D12Resource, castable: &[u32], mut format: Option<&mut DXGI
     if view == 0 {
         return !typeless;
     }
+    // A view in a console format whose host texture took a substitute
+    // (RENDER_SUBSTITUTES) reads the substitute: a cast would reinterpret
+    // the substitute's bits in the console format.
+    if crate::resource::substituted_view(view, own) {
+        if let Some(format) = format {
+            *format = d.Format;
+        }
+        return true;
+    }
     let cast = castable.contains(&view);
     if family(view) != family(own) && !cast {
         once!(view, own, "view format of another family");

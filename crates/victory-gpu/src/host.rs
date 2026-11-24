@@ -682,6 +682,36 @@ struct Deferred {
 }
 
 impl Host {
+    /// Whether textures in `format` can be render targets (if
+    /// `render_target`) and take typed unordered-access writes (if
+    /// `unordered`); asked once per format.
+    pub(crate) fn format_supports(&self, format: u32, render_target: bool, unordered: bool) -> bool {
+        static CACHE: OnceLock<Mutex<std::collections::HashMap<u32, (u32, u32)>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(Default::default);
+        let (one, two) = *cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(format)
+            .or_insert_with(|| {
+                let mut data = D3D12_FEATURE_DATA_FORMAT_SUPPORT {
+                    Format: DXGI_FORMAT(format as i32),
+                    ..Default::default()
+                };
+                // SAFETY: the query writes its own structure of the given size.
+                let ok = unsafe {
+                    self.device.CheckFeatureSupport(
+                        D3D12_FEATURE_FORMAT_SUPPORT,
+                        (&raw mut data).cast(),
+                        size_of_val(&data) as u32,
+                    )
+                }
+                .is_ok();
+                if ok { (data.Support1.0 as u32, data.Support2.0 as u32) } else { (0, 0) }
+            });
+        (!render_target || one & D3D12_FORMAT_SUPPORT1_RENDER_TARGET.0 as u32 != 0)
+            && (!unordered || two & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE.0 as u32 != 0)
+    }
+
     /// Whether the host runs mesh shaders at shader model 6.6 (translated
     /// mesh shaders need both); logged once.
     pub(crate) fn mesh_shaders(&self) -> bool {
