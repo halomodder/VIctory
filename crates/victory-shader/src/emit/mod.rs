@@ -236,6 +236,27 @@ pub const DEFAULT_LOOP_LIMIT: u32 = lower::LOOP_LIMIT;
 /// such loops are what makes a frame slow. The value is part of the
 /// translation, so the shader cache must key on it (`victory-gpu`'s does).
 pub fn loop_limit() -> u32 {
+    loop_limit_setting()
+}
+
+/// `VICTORY_RAY_TRACING=off` (or `0`): every emulated BVH intersection
+/// (`image_bvh*_intersect_ray`) misses without reading its node, so the
+/// title's traversal loops end at their first node and rays see nothing
+/// (unshadowed, unoccluded). For hosts where the title's acceleration
+/// structures are incomplete and traversal runs for seconds (a GPU hang).
+/// Part of the translation: the shader cache and pipeline library key on
+/// it.
+pub fn ray_tracing_off() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| {
+        matches!(
+            std::env::var("VICTORY_RAY_TRACING").ok().as_deref().map(str::trim),
+            Some("off" | "OFF" | "Off" | "0")
+        )
+    })
+}
+
+fn loop_limit_setting() -> u32 {
     static LIMIT: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *LIMIT.get_or_init(|| {
         if cfg!(feature = "diagnostics") {

@@ -190,6 +190,18 @@ impl Lower<'_> {
 
     /// The four result dwords of `ray` against the node `node` points to.
     fn bvh_lanes(&mut self, nodes: &Nodes, node: V, ray: &Ray) -> Result<[V; 4], Why> {
+        if crate::emit::ray_tracing_off() {
+            // Every node misses: a triangle's miss, else four invalid
+            // children (what a box missing all its boxes returns).
+            let c = self.cur;
+            let seven = self.s.m.i32(7);
+            let ty = self.s.m.bin(c, Bin::And, node, seven);
+            let four = self.s.m.i32(4);
+            let is_tri = self.s.m.cmp(c, pred::IULT, ty, four);
+            let none = self.s.m.i32(INVALID);
+            let miss = [f32::INFINITY.to_bits(), 1.0f32.to_bits(), 0, 0].map(|v| self.s.m.i32(v));
+            return Ok(std::array::from_fn(|k| self.s.m.select(c, is_tri, miss[k], none)));
+        }
         let w = self.node_dwords(nodes, 0, 16)?;
         let c = self.cur;
         let seven = self.s.m.i32(7);

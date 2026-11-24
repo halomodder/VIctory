@@ -64,7 +64,12 @@ fn build() -> &'static [u8; 32] {
                 "VICTORY_SHADER_LOOP_LIMIT: translated loops stop sooner"
             );
         }
-        key(victory_shader::SOURCE_HASH, ENCODING, limit)
+        // VICTORY_RAY_TRACING=off changes translations too: the top bit.
+        let rt_off = victory_shader::emit::ray_tracing_off();
+        if rt_off {
+            tracing::warn!("VICTORY_RAY_TRACING=off: emulated ray intersections miss everything");
+        }
+        key(victory_shader::SOURCE_HASH, ENCODING, limit ^ (u32::from(rt_off) << 31))
     })
 }
 
