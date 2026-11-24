@@ -2840,6 +2840,9 @@ impl Host {
             Some(hwnd) => hwnd,
             None => window(width, height).map_err(|e| ("window", e))?,
         };
+        if let Some((w, h)) = window_size() {
+            size_window(hwnd, w, h);
+        }
         // SAFETY: plain object creation for our window.
         unsafe {
             let factory: IDXGIFactory2 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))
@@ -3112,6 +3115,45 @@ pub(crate) fn transition(
             }),
         },
     }
+}
+
+/// `VICTORY_WINDOW_SIZE=<width>x<height>`: the client size the window is
+/// given when presenting starts; frames are scaled to it (the title's
+/// resolution does not change).
+fn window_size() -> Option<(u32, u32)> {
+    let value = std::env::var("VICTORY_WINDOW_SIZE").ok()?;
+    let (w, h) = value.trim().split_once(['x', 'X'])?;
+    let w = w.trim().parse::<u32>().ok().filter(|&n| n > 0)?;
+    let h = h.trim().parse::<u32>().ok().filter(|&n| n > 0)?;
+    Some((w, h))
+}
+
+/// Gives `hwnd` a client area of `width` x `height`, keeping its place; the
+/// window may belong to the title's thread, so the change is posted
+/// rather than waited for.
+fn size_window(hwnd: HWND, width: u32, height: u32) {
+    // SAFETY: a live window handle and our own rectangle.
+    unsafe {
+        let style = WINDOW_STYLE(GetWindowLongW(hwnd, GWL_STYLE) as u32);
+        let ex_style = WINDOW_EX_STYLE(GetWindowLongW(hwnd, GWL_EXSTYLE) as u32);
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
+        let _ = AdjustWindowRectEx(&mut rect, style, false, ex_style);
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+        );
+    }
+    tracing::info!(width, height, "window client size set (VICTORY_WINDOW_SIZE)");
 }
 
 /// A window of the given client size, owned by its own message thread.
