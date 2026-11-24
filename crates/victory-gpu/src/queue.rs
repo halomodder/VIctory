@@ -132,6 +132,11 @@ extern "system" fn execute(_: This, count: u32, lists: *const This) {
     }
 }
 
+/// Bytes from one present plane description to the next (seen in Grand
+/// Theft Auto VI: token, count, resources, source rects, destination
+/// placement, then four zero words).
+const PLANE_STRIDE: usize = 0x48;
+
 /// The start of a present plane: frame token, then the plane's resources.
 #[repr(C)]
 pub(crate) struct Plane {
@@ -289,10 +294,30 @@ extern "system" fn present(
         && let Some(texture) = crate::resource::host_resource(resource)
         && let Some(host) = crate::host::host()
     {
-        const COPY_SOURCE: u32 = 0x800;
-        let state = crate::resource::host_transition(resource, COPY_SOURCE)
-            .map_or(COPY_SOURCE, |(_, before)| before);
-        let shown = host.present(texture, state, frame);
+        // A second plane (the title's interface) is composed over the first.
+        let overlay = (planes > 1 && std::env::var_os("VICTORY_FIRST_PLANE_ONLY").is_none())
+            // SAFETY: the title passes `planes` descriptions, PLANE_STRIDE apart.
+            .then(|| unsafe { plane_parameters.cast::<u8>().add(PLANE_STRIDE).cast::<Plane>().as_ref() })
+            .flatten()
+            .filter(|p| p.count > 0 && !p.resources.is_null())
+            // SAFETY: the plane lists `count` resources.
+            .map(|p| unsafe { *p.resources })
+            .filter(|&r| r != resource && crate::resource::host_resource(r).is_some());
+        let (state, shown) = if let Some(top) = overlay
+            && let Some(top_texture) = crate::resource::host_resource(top)
+        {
+            const READ: u32 = 0x80;
+            let top_state = crate::resource::host_transition(top, READ).map_or(READ, |(_, b)| b);
+            let state = crate::resource::host_transition(resource, READ).map_or(READ, |(_, b)| b);
+            let shown = host.present_planes(texture, state, top_texture, top_state, frame);
+            crate::resource::host_transition(top, top_state);
+            (state, shown)
+        } else {
+            const COPY_SOURCE: u32 = 0x800;
+            let state = crate::resource::host_transition(resource, COPY_SOURCE)
+                .map_or(COPY_SOURCE, |(_, before)| before);
+            (state, host.present(texture, state, frame))
+        };
         crate::resource::host_transition(resource, state);
         #[cfg(feature = "diagnostics")]
         blinks(frame, resource, state, shown);
