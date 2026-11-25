@@ -129,7 +129,19 @@ impl Shadow {
     #[cfg(feature = "diagnostics")]
     pub(crate) fn peek(&self, address: u64, len: u64) -> String {
         let at = address.saturating_sub(self.start) as usize;
-        let n = (len.min(64) as usize).min((self.len as usize).saturating_sub(at)) / 4;
+        let n = (len.min(4096) as usize).min((self.len as usize).saturating_sub(at)) / 4;
+        if n > 16 {
+            // Longer (VICTORY_PEEK_SHADER): the non-zero dwords, by byte offset.
+            // SAFETY: as below.
+            let d = unsafe { std::slice::from_raw_parts(self.data.add(at).cast::<u32>(), n) };
+            let set: Vec<String> = d
+                .iter()
+                .enumerate()
+                .filter(|&(_, &w)| w != 0)
+                .map(|(i, w)| format!("+{:#x}={w:#x}", i * 4))
+                .collect();
+            return format!("copy {:#x}+{:#x} {} of {n} dwords set: {}", self.start, self.len, set.len(), set.join(" "));
+        }
         // SAFETY: inside the mapping (checked); a racing GPU write only makes
         // the logged value stale.
         let v = unsafe { std::slice::from_raw_parts(self.data.add(at).cast::<f32>(), n) };

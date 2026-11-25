@@ -1228,7 +1228,8 @@ impl State {
         }
     }
 
-    /// In a listed frame: each small buffer (64 bytes at most) the draw's
+    /// In a listed frame: each small buffer (64 bytes at most; 4 KiB for the
+    /// shaders `VICTORY_PEEK_SHADER` names) the draw's
     /// tables name, as title memory now and as its host copy when the list
     /// is submitted (before the GPU runs it) and after it has run.
     #[cfg(feature = "diagnostics")]
@@ -1251,7 +1252,10 @@ impl State {
                     View::Constant(address, size) => Some((address, u64::from(size))),
                     ref v => crate::descriptor::host::buffer_range(v),
                 };
-                let Some((at, len)) = range.filter(|r| r.1 <= 64) else {
+                // VICTORY_PEEK_SHADER=<hash>,...: those shaders' buffers up to
+                // 4 KiB too (constant buffers holding loop counts, say).
+                let wide = peek_shader(&stage.shader.hash);
+                let Some((at, len)) = range.filter(|r| r.1 <= 64 || wide && r.1 <= 4096) else {
                     continue;
                 };
                 let Some(shadow) = crate::shadow::find(at, len) else { continue };
@@ -2492,4 +2496,21 @@ void main(uint3 id : SV_DispatchThreadID) {
         slots.make_null(0);
         assert!(shown.upgrade().is_none(), "released with the slot");
     }
+}
+
+/// Whether `VICTORY_PEEK_SHADER` (16-digit shader hashes, comma-separated)
+/// names `hash`: listed frames then also log its buffers up to 4 KiB.
+#[cfg(feature = "diagnostics")]
+fn peek_shader(hash: &str) -> bool {
+    static LIST: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    LIST.get_or_init(|| {
+        std::env::var("VICTORY_PEEK_SHADER")
+            .unwrap_or_default()
+            .split(',')
+            .map(|h| h.trim().to_ascii_lowercase())
+            .filter(|h| !h.is_empty())
+            .collect()
+    })
+    .iter()
+    .any(|h| h == hash)
 }
